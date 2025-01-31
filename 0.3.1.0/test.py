@@ -22,23 +22,17 @@ if is_ipython:
 
 plt.ion()
 
+
 class RobotLocomotionEnv(gym.Env):
     def __init__(self):
         # Action space: 5 discrete actions
         self.action_space = spaces.Discrete(5)
 
-        # Observation space: 8D vector
-        # robot pos, adversary pos, robot vel, adversary vel
-        low = np.array([-np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf, -np.inf])
-        high = np.array([np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf, np.inf])
-        self.robot_observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
-        self.defender_observation_space = spaces.Box(low=low, high=high, dtype=np.float32)
-
         # Environment constants
-        self.max_steps = 400
+        self.max_steps = 280
         self.target = np.array([0.0, 0.0])
         self.success_reward = 100
-        self.action_cost = -0.1
+        self.action_cost = -0.1 #! todo implement
 
         # Simulation parameters
         self.force_magnitude = 500  # Magnitude of the applied force
@@ -46,87 +40,76 @@ class RobotLocomotionEnv(gym.Env):
 
     def reset(self):
         self.steps = 0
+
         # Set up the simulation environment
         p.resetSimulation()
         p.setGravity(0, 0, -9.81)
-
-        # Create a simple box (brick)
-        start_pos = [0, 0, 0.5]
-        start_orientation = [0, 0, 0, 1]  # No rotation (quaternion)
-        self.adv_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.5, 0.5, 0.5])
-        self.adv_body = p.createMultiBody(baseMass=1,
-                                    baseCollisionShapeIndex=self.adv_id,
-                                    basePosition=start_pos,
-                                    baseOrientation=start_orientation)
-
-        # Set friction for the box
-        p.changeDynamics(self.adv_body, -1, lateralFriction=0.5, spinningFriction=0.5, rollingFriction=0.5)
-
-        # Load a plane
-        plane_id = p.loadURDF("plane.urdf")
-
-        # Physics engine parameters
+        p.loadURDF("plane.urdf")
         p.setPhysicsEngineParameter(enableConeFriction=1)
 
-        # Create a simple box (brick)
+        def _create_box(start_pos, start_orientation=[0, 0, 0, 1]):
+            """Helper function to create a box with standard parameters"""
+            collision_id = p.createCollisionShape(p.GEOM_CYLINDER, radius=0.65, height=1.0)
+            body = p.createMultiBody(baseMass=1,
+                                baseCollisionShapeIndex=collision_id,
+                                basePosition=start_pos,
+                                baseOrientation=start_orientation)
+            p.changeDynamics(body, -1, lateralFriction=0.5, spinningFriction=0.5, rollingFriction=0.5)
+
+            return collision_id, body
+
+        # Create adversary box at center
+        self.adv_id, self.adv_body = _create_box([0, 0, 0.5])
+
+        # Create agent box at random position
         agent_x = random.uniform(0.5, 10) * np.random.choice([-1, 1])
         agent_y = random.uniform(0.5, 10) * np.random.choice([-1, 1])
-        # Create a simple box (brick)
-        start_pos = [agent_x, agent_y, 0.5]
-        start_orientation = [0, 0, 0, 1]  # No rotation (quaternion)
-        self.ag_id = p.createCollisionShape(p.GEOM_BOX, halfExtents=[0.5, 0.5, 0.5])
-        self.ag_body = p.createMultiBody(baseMass=1,
-                                    baseCollisionShapeIndex=self.ag_id,
-                                    basePosition=start_pos,
-                                    baseOrientation=start_orientation)
-
-        # Set friction for the box
-        p.changeDynamics(self.ag_body, -1, lateralFriction=0.5, spinningFriction=0.5, rollingFriction=0.5)
+        self.ag_id, self.ag_body = _create_box([agent_x, agent_y, 0.5])
         return self.get_state()
 
     def step(self, ag_action, adv_action):
         self.steps += 1
         if self.steps > self.max_steps or self.reached_goal():
             raise ValueError("Max steps reached")
-        # Apply action to update accelerations
-        def get_action(action):
-            linear_acc = np.zeros(2)
-            if action == 0:
-                # Acc forward move
-                linear_acc = np.array([0, self.force_magnitude])
-            elif action == 1:
-                # Acc backward move
-                linear_acc = np.array([0, -self.force_magnitude])
-            elif action == 2:
-                # Acc left move
-                linear_acc = np.array([-self.force_magnitude, 0])
-            elif action == 3:
-                # Acc right move
-                linear_acc = np.array([self.force_magnitude, 0])
-            elif action == 4:
-                # Do nothing: no acceleration
-                pass
-            else:
-                raise ValueError("Invalid action")
-            return [linear_acc[0], linear_acc[1], 0]
 
-        p.applyExternalForce(
-            objectUniqueId=self.ag_body,
-            linkIndex=-1,
-            forceObj=get_action(ag_action),
-            posObj=p.getBasePositionAndOrientation(self.ag_body)[0],
-            flags=p.WORLD_FRAME,
-        )
-        p.applyExternalForce(
-            objectUniqueId=self.adv_body,
-            linkIndex=-1,
-            forceObj=get_action(adv_action),
-            posObj=p.getBasePositionAndOrientation(self.adv_body)[0],
-            flags=p.WORLD_FRAME,
-        )
+        def apply_action(body_id, action):
+            # Map discrete actions to force vectors
+            action_to_force = {
+                0: [0, self.force_magnitude, 0],  # Forward
+                1: [0, -self.force_magnitude, 0], # Backward 
+                2: [-self.force_magnitude, 0, 0], # Left
+                3: [self.force_magnitude, 0, 0],  # Right
+                4: [0, 0, 0]                      # No movement
+            }
+
+            if action not in action_to_force:
+                raise ValueError("Invalid action")
+            
+            force = action_to_force[action]
+            pos = p.getBasePositionAndOrientation(body_id)[0]
+            
+            p.applyExternalForce(
+                objectUniqueId=body_id,
+                linkIndex=-1,
+                forceObj=force,
+                posObj=pos,
+                flags=p.WORLD_FRAME
+            )
+
+        # Apply forces to both agent and adversary
+        apply_action(self.ag_body, ag_action)
+        apply_action(self.adv_body, adv_action)
+
         p.stepSimulation()
         state = self.get_state()
-        return state, self.get_agent_reward(), self.get_adversary_reward(), self.reached_goal(), self.steps >= self.max_steps
+        
+        return (
+            state,
+            self.get_agent_reward(),
+            self.get_adversary_reward(),
+            self.reached_goal(),
+            self.steps >= self.max_steps
+        )
 
     def get_state(self):
         ag_pos, ag_orientation = p.getBasePositionAndOrientation(self.ag_body)
@@ -140,7 +123,6 @@ class RobotLocomotionEnv(gym.Env):
         adv_position, adv_orientation = p.getBasePositionAndOrientation(self.adv_body)
         return np.linalg.norm(np.array([position[0], position[1]]) - np.array([adv_position[0], adv_position[1]]))
 
-
     def ag_dist_to_target(self):
         position, orientation = p.getBasePositionAndOrientation(self.ag_body)
         return np.linalg.norm(np.array([position[0], position[1]]) - self.target)
@@ -148,13 +130,22 @@ class RobotLocomotionEnv(gym.Env):
     def get_adversary_reward(self):
         if self.reached_goal():
             return -self.success_reward
-        return (self.ag_dist_to_target() - (self.dist_between_entities()/2))/16
+        # penalties are normalized 0 to -1 or 0 to 1
+        dist_to_target_penalty = self.ag_dist_to_target() / (20 * 2**0.5) - 1
+        dist_between_entities_penalty = -self.dist_between_entities() / (20 * 2**0.5)
+        time_penalty = 1
+        # penalties are multiplied by fractions of the success reward
+        return (time_penalty * 0.7 + dist_between_entities_penalty * 0.3) / self.max_steps * self.success_reward
 
     def get_agent_reward(self):
         if self.reached_goal():
             return self.success_reward
-        else:
-            return -self.ag_dist_to_target() / 16
+        
+        # penalties are normalized 0 to -1
+        dist_to_target_penalty = -self.ag_dist_to_target() / (20 * 2**0.5)
+        time_penalty = -1
+        # penalties are multiplied by fractions of the success reward
+        return (time_penalty *1 + dist_to_target_penalty * 0.2) / self.max_steps * self.success_reward
 
     def reached_goal(self):
         return self.ag_dist_to_target() < 0.5
@@ -216,8 +207,8 @@ def select_action(state, agent):
             return policy_net_adv(state).max(1).indices.view(1, 1)
 
 
-policy_net_ag.load_state_dict(torch.load("policy_net_agent.pth", map_location=device))
-policy_net_adv.load_state_dict(torch.load("policy_net_adversary.pth", map_location=device))
+policy_net_ag.load_state_dict(torch.load("./0.3.1.0/policy_net_agent.pth", map_location=device))
+policy_net_adv.load_state_dict(torch.load("./0.3.1.0/policy_net_adversary.pth", map_location=device))
 
 import time
 import torch
@@ -244,12 +235,18 @@ time_step = 1.0 / 240.0  # Adjust for comfortable visualization
 state = env.reset()
 
 while True:
+    # Check for reset key press
+    keys = p.getKeyboardEvents()
+    if ord('r') in keys and keys[ord('r')] & p.KEY_WAS_TRIGGERED:
+        print("Manual reset triggered")
+        state = env.reset()
+        continue
+
     # 1) Get an action for the agent
     if CONTROL_MODE == "AGENT":
         # Use keyboard for main agent
         ag_action = 4  # default "do nothing" = 4
-        keys = p.getKeyboardEvents()
-
+        
         if p.B3G_UP_ARROW in keys and keys[p.B3G_UP_ARROW] & p.KEY_IS_DOWN:
             ag_action = 0  # forward
         elif p.B3G_DOWN_ARROW in keys and keys[p.B3G_DOWN_ARROW] & p.KEY_IS_DOWN:
@@ -269,7 +266,6 @@ while True:
     if CONTROL_MODE == "ADVERSARY":
         # Use keyboard for adversary
         adv_action = 4  # default "do nothing" = 4
-        keys = p.getKeyboardEvents()
 
         if p.B3G_UP_ARROW in keys and keys[p.B3G_UP_ARROW] & p.KEY_IS_DOWN:
             adv_action = 0  # forward
