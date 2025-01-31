@@ -220,7 +220,7 @@ import pybullet as p
 #   "ADVERSARY"-> user controls adversary
 #   "NONE"     -> both agent and adversary are controlled by networks
 # -------------------------------------------------------------------------
-CONTROL_MODE = "None"  
+CONTROL_MODE = "ADVERSARY"  
 
 # -------------------------------------------------------------------------
 # Assume you have defined the following objects/functions above:
