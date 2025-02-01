@@ -41,4 +41,7 @@ The agents were turned into cylinders 👍
 
 ## Takeaways
 
-1. This is bad. The model only 
+1. This is bad. The model only experienced a few successes and it's memory is only 50 episodes
+   1. maybe increase the memory by 900%? Increase batch size more?
+2. Success might also be more sparse because of the new shape. Maybe the adversary is learning?
+3. Maybe the higher rewards fuqed with the model
