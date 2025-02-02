@@ -11,6 +11,7 @@ def get_adversary_reward(self):
 def get_agent_reward(self):
     if self.reached_goal():
         return self.success_reward
+    return -self.ag_dist_to_target() / 16
 ```
 
 to
@@ -39,9 +40,11 @@ def get_agent_reward(self):
 
 The agents were turned into cylinders 👍
 
+The length of a sim was reduced from 400 to 280 steps
+
 ## Takeaways
 
 1. This is bad. The model only experienced a few successes and it's memory is only 50 episodes
    1. maybe increase the memory by 900%? Increase batch size more?
-2. Success might also be more sparse because of the new shape. Maybe the adversary is learning?
-3. Maybe the higher rewards fuqed with the model
+2. Success might also be more sparse because of the new shape. Maybe the adversary is learning? **EDIT: both agents are retarded**
+3. Maybe the lower rewards fuqed with the model
